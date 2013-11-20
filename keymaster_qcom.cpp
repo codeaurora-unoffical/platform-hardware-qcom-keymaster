@@ -1,8 +1,5 @@
 /*
- *  Copyright (C) 2011 The Android Open Source Project
- *  Copyright (c) 2012- 2013, The Linux Foundation. All rights reserved.
- *  Not a Contribution, Apache license notifications and license are retained
- *  for attribution purposes only.
+ *  Copyright (C) 2012 The Android Open Source Project
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you
  *  may not use this file except in compliance with the License.  You may
@@ -20,8 +17,6 @@
 #include <errno.h>
 #include <string.h>
 #include <stdint.h>
-
-#include <keystore/keystore.h>
 
 #include <hardware/hardware.h>
 #include <hardware/keymaster.h>
@@ -75,7 +70,6 @@ struct qcom_keymaster_handle {
     int (*QSEECom_send_modified_cmd)(struct QSEECom_handle* handle, void *cbuf,
                           uint32_t clen, void *rbuf, uint32_t rlen,
                           struct QSEECom_ion_fd_info *ihandle);
-    int (*QSEECom_set_bandwidth)(struct QSEECom_handle* handle, bool high);
 };
 typedef struct qcom_keymaster_handle qcom_keymaster_handle_t;
 
@@ -355,18 +349,9 @@ static int qcom_km_generate_keypair(const keymaster_device_t* dev,
     resp->status = KEYMASTER_FAILURE;
     resp->key_blob_len =  sizeof(qcom_km_key_blob_t);
 
-    ret = (*km_handle->QSEECom_set_bandwidth)(handle, true);
-    if (ret < 0) {
-        ALOGE("Generate key command failed (unable to enable clks) ret =%d", ret);
-        return -1;
-    }
-
     ret = (*km_handle->QSEECom_send_cmd)(handle, send_cmd,
                                QSEECOM_ALIGN(sizeof(keymaster_gen_keypair_cmd_t)), resp,
                                QSEECOM_ALIGN(sizeof(keymaster_gen_keypair_resp_t)));
-
-    if((*km_handle->QSEECom_set_bandwidth)(handle, false))
-        ALOGE("Import key command: (unable to disable clks)");
 
     if ( (ret < 0)  ||  (resp->status  < 0)) {
         ALOGE("Generate key command failed resp->status = %d ret =%d", resp->status, ret);
@@ -437,18 +422,9 @@ static int qcom_km_import_keypair(const keymaster_device_t* dev,
     resp->status = KEYMASTER_FAILURE;
     resp->key_blob_len =  sizeof(qcom_km_key_blob_t);
 
-    ret = (*km_handle->QSEECom_set_bandwidth)(handle, true);
-    if (ret < 0) {
-        ALOGE("Import key command failed (unable to enable clks) ret =%d", ret);
-        qcom_km_ion_dealloc(&ihandle);
-        return -1;
-    }
     ret = (*km_handle->QSEECom_send_modified_cmd)(handle, send_cmd,
                                QSEECOM_ALIGN(sizeof(*send_cmd)), resp,
                                QSEECOM_ALIGN(sizeof(*resp)), &ion_fd_info);
-
-    if((*km_handle->QSEECom_set_bandwidth)(handle, false))
-        ALOGE("Import key command: (unable to disable clks)");
 
     if ( (ret < 0)  ||  (resp->status  < 0)) {
         ALOGE("Import key command failed resp->status = %d ret =%d", resp->status, ret);
@@ -536,20 +512,9 @@ static int qcom_km_sign_data(const keymaster_device_t* dev,
     resp->sig_len = KM_KEY_SIZE_MAX;
     resp->status = KEYMASTER_FAILURE;
 
-    ret = (*km_handle->QSEECom_set_bandwidth)(handle, true);
-    if (ret < 0) {
-        ALOGE("Sign data command failed (unable to enable clks) ret =%d", ret);
-        qcom_km_ion_dealloc(&ihandle);
-        return -1;
-    }
-
     ret = (*km_handle->QSEECom_send_modified_cmd)(handle, send_cmd,
                                QSEECOM_ALIGN(sizeof(*send_cmd)), resp,
                                QSEECOM_ALIGN(sizeof(*resp)), &ion_fd_info);
-
-    if((*km_handle->QSEECom_set_bandwidth)(handle, false))
-        ALOGE("Sign data command: (unable to disable clks)");
-
     if ( (ret < 0)  ||  (resp->status  < 0)) {
         ALOGE("Sign data command failed resp->status = %d ret =%d", resp->status, ret);
         qcom_km_ion_dealloc(&ihandle);
@@ -639,20 +604,9 @@ static int qcom_km_verify_data(const keymaster_device_t* dev,
     memcpy(((unsigned char *)ihandle.ion_sbuffer + signedDataLength),
                                   signature, signatureLength);
     resp->status = KEYMASTER_FAILURE;
-
-    ret = (*km_handle->QSEECom_set_bandwidth)(handle, true);
-    if (ret < 0) {
-        ALOGE("Verify data  command failed (unable to enable clks) ret =%d", ret);
-        qcom_km_ion_dealloc(&ihandle);
-        return -1;
-    }
-
     ret = (*km_handle->QSEECom_send_modified_cmd)(handle, send_cmd,
                                QSEECOM_ALIGN(sizeof(*send_cmd)), resp,
                                QSEECOM_ALIGN(sizeof(*resp)), &ion_fd_info);
-
-    if((*km_handle->QSEECom_set_bandwidth)(handle, false))
-        ALOGE("Verify data  command: (unable to disable clks)");
 
     if ( (ret < 0)  ||  (resp->status  < 0)) {
         ALOGE("Verify data command failed resp->status = %d ret =%d", resp->status, ret);
@@ -669,10 +623,6 @@ static int qcom_km_close(hw_device_t *dev)
     keymaster_device_t* km_dev = (keymaster_device_t *)dev;
     struct qcom_keymaster_handle *km_handle =(struct qcom_keymaster_handle *)km_dev->context;
 
-    if (km_handle == NULL) {
-        ALOGE("km_handle == NULL");
-        return -1;
-    }
     if (km_handle->qseecom == NULL) {
         ALOGE("Context  == NULL");
         return -1;
@@ -719,15 +669,6 @@ static int qcom_km_get_lib_sym(qcom_keymaster_handle_t* km_handle)
                    km_handle->libhandle  = NULL;
                    return -1;
              }
-            *(void **)(&km_handle->QSEECom_set_bandwidth) =
-                               dlsym(km_handle->libhandle,"QSEECom_set_bandwidth");
-            if (km_handle->QSEECom_set_bandwidth == NULL) {
-                   ALOGE("dlsym: Error Loading QSEECom_set_bandwidth");
-                   dlclose(km_handle->libhandle );
-                   km_handle->libhandle  = NULL;
-                   return -1;
-             }
-
     } else {
         ALOGE("failed to load qseecom library");
         return -1;
@@ -769,15 +710,6 @@ static int qcom_km_open(const hw_module_t* module, const char* name,
     if (ret) {
         ALOGE("Loading keymaster app failied");
         free(km_handle);
-        dev->context = NULL;
-        dev->generate_keypair = NULL;
-        dev->import_keypair = NULL;
-        dev->get_keypair_public = NULL;
-        dev->delete_keypair = NULL;
-        dev->delete_all = NULL;
-        dev->sign_data = NULL;
-        dev->verify_data = NULL;
-        dev->common.close = NULL;
         return -1;
     }
     dev->common.tag = HARDWARE_DEVICE_TAG;

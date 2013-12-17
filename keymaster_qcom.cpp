@@ -18,7 +18,6 @@
 #include <string.h>
 #include <stdint.h>
 
-#include <keystore/keystore.h>
 #include <hardware/hardware.h>
 #include <hardware/keymaster.h>
 
@@ -63,8 +62,8 @@ struct qcom_km_ion_info_t {
 struct qcom_keymaster_handle {
     struct QSEECom_handle *qseecom;
     void *libhandle;
-    int (*QSEECom_start_app)(struct QSEECom_handle ** handle, char* path,
-                          char* appname, uint32_t size);
+    int (*QSEECom_start_app)(struct QSEECom_handle ** handle, const char *path,
+                          const char *appname, uint32_t size);
     int (*QSEECom_shutdown_app)(struct QSEECom_handle **handle);
     int (*QSEECom_send_cmd)(struct QSEECom_handle* handle, void *cbuf,
                           uint32_t clen, void *rbuf, uint32_t rlen);
@@ -681,7 +680,7 @@ static int qcom_km_close(hw_device_t *dev)
 
 static int qcom_km_get_lib_sym(qcom_keymaster_handle_t* km_handle)
 {
-    km_handle->libhandle = dlopen("/system/lib/libQSEEComAPI.so", RTLD_NOW);
+    km_handle->libhandle = dlopen("/vendor/lib/libQSEEComAPI.so", RTLD_NOW);
     if (  km_handle->libhandle  ) {
         *(void **)(&km_handle->QSEECom_start_app) =
                                dlsym(km_handle->libhandle,"QSEECom_start_app");

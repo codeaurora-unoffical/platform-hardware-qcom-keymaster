@@ -9,7 +9,7 @@ endif
 
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := keystore.qcom
+LOCAL_MODULE := keystore.false
 
 LOCAL_MODULE_RELATIVE_PATH := hw
 

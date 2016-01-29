@@ -67,6 +67,9 @@ typedef struct  qcom_km_key_blob qcom_km_key_blob_t;
 /**
  * Commands supported
  */
+
+#define KEYMASTER_CMD_ID_SOTER  0x10000UL
+
 enum  keymaster_cmd_t {
     /*
      * List the commands supportedin by the hardware.
@@ -75,6 +78,16 @@ enum  keymaster_cmd_t {
     KEYMASTER_IMPORT_KEYPAIR = 0x00000002,
     KEYMASTER_SIGN_DATA = 0x00000003,
     KEYMASTER_VERIFY_DATA = 0x00000004,
+
+    KEYMASTER_SOTER_GENERATE_ATTK = (KEYMASTER_CMD_ID_SOTER + 1UL),
+    KEYMASTER_SOTER_VERIFY_ATTK = (KEYMASTER_CMD_ID_SOTER + 2UL),
+    KEYMASTER_SOTER_EXPORT_ATTK_PUBLIC = (KEYMASTER_CMD_ID_SOTER + 3UL),
+    KEYMASTER_SOTER_GET_DEVICE_ID = (KEYMASTER_CMD_ID_SOTER + 4UL),
+    KEYMASTER_SOTER_EXPORT_KEY = (KEYMASTER_CMD_ID_SOTER + 5UL),
+
+ 
+    KEYMASTER_LAST_CMD_ENTRY = (int) 0xFFFFFFFFULL
+
 };
 
 
@@ -216,6 +229,51 @@ struct  keymaster_verify_data_resp {
       int32_t             status;
 };
 typedef struct keymaster_verify_data_resp keymaster_verify_data_resp_t;
+
+//Soter info
+#ifdef FEATURE_SOTER
+
+/*
+ * Structures for attk cmd
+ */
+
+/**
+ @brief
+ Data structure
+
+ @param[in]   cmd_id          Requested command
+ @param[in]   copy_num        attk copy numbers
+ */
+typedef struct _attk_req {
+    keymaster_cmd_t cmd_id;
+    uint32_t copy_num;
+}__attribute__ ((packed)) attk_req_t;
+
+/**
+ @brief
+ Data structure
+
+ @param[out]   status          Status of the request
+ @param[in]   output_buf       Output buffer - should be allocated by HLOS
+ that contains the output data for the operation.
+ @param[in]   output_length    Output buffer size.
+ */
+typedef struct _attk_rsp {
+    int status;
+    uint32_t output_buf;
+    uint32_t output_length;
+}__attribute__ ((packed)) attk_rsp_t;
+
+typedef struct _km_rsa_key_blob_type_t
+{
+    uint32_t modulus;
+    uint32_t modulus_size;
+    uint32_t public_exponent;
+    uint32_t public_exponent_size;
+    uint32_t private_exponent;
+    uint32_t private_exponent_size;
+} __attribute__ ((packed)) km_rsa_key_blob_type_t; 
+#endif /* FEATURE_SOTER */
 
 __END_DECLS
 

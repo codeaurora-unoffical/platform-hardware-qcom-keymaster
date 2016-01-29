@@ -8,7 +8,7 @@ keymaster-def += -D_ION_HEAP_MASK_COMPATIBILITY_WA
 endif
 
 include $(CLEAR_VARS)
-
+keymaster-def += -DFEATURE_SOTER
 LOCAL_MODULE := keystore.qcom
 
 LOCAL_MODULE_RELATIVE_PATH := hw

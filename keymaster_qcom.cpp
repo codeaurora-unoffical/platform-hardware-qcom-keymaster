@@ -22,6 +22,7 @@
 #include <hardware/keymaster.h>
 
 #include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/bio.h>
 #include <openssl/rsa.h>
 #include <openssl/err.h>
@@ -52,7 +53,7 @@
 
 #define LOG_TAG "QCOMKeyMaster"
 #define UNUSED(x) (void)(x)
-#define KM_SB_LENGTH (4096 * 2)
+#define KM_SB_LENGTH (4096 * 16)
 
 #include <cutils/log.h>
 struct qcom_km_ion_info_t {
@@ -94,6 +95,20 @@ typedef UniquePtr<RSA, RSA_Delete> Unique_RSA;
 
 typedef UniquePtr<keymaster_device_t> Unique_keymaster_device_t;
 
+struct BIO_Delete {
+    void operator()(BIO* p) const {
+        BIO_free_all(p);
+    }
+};
+typedef UniquePtr<BIO, BIO_Delete> Unique_BIO;
+
+static size_t km_memscpy(void *dst, size_t dst_size, void *src,
+                                  size_t src_size)
+{
+    size_t copy_size = (dst_size <= src_size) ? dst_size : src_size;
+    memcpy(dst, src, copy_size);
+    return copy_size;
+}
 /**
  * Many OpenSSL APIs take ownership of an argument on success but don't free the argument
  * on failure. This means we need to tell our scoped pointers when we've transferred ownership,
@@ -731,6 +746,303 @@ static int qcom_km_get_lib_sym(qcom_keymaster_handle_t* km_handle)
     return 0;
 }
 
+#ifdef FEATURE_SOTER
+int generate_attk_key_pair(const struct keymaster_device* dev,
+        const uint8_t copy_num) {
+    attk_req_t *req = NULL;
+    attk_rsp_t *rsp = NULL;
+    struct QSEECom_handle* handle = 0; // handle to KM TA
+    struct qcom_keymaster_handle *km_handle = NULL;
+    uint8_t *copy_num_ptr = NULL;
+    uint32_t req_size = 0;
+    int ret = 0;
+
+    if (!dev) {
+        ALOGE("pointer NULL");
+        return -1;
+    }
+
+    km_handle = (struct qcom_keymaster_handle *) dev->context;
+    if (!km_handle) {
+        ALOGE("km_handle NULL");
+        return -1;
+    }
+
+    handle = (struct QSEECom_handle *) (km_handle->qseecom);
+    if (!handle) {
+        ALOGE("Qseecom handle NULL");
+        return -1;
+    }
+
+    req = (attk_req_t *) handle->ion_sbuffer;
+    if (!req) {
+        ALOGE("handle->ion_sbuffer handle NULL");
+        return -1;
+    }
+    memset(handle->ion_sbuffer, 0, KM_SB_LENGTH);
+    req->cmd_id = KEYMASTER_SOTER_GENERATE_ATTK;
+    req->copy_num = copy_num;
+    req_size = sizeof(attk_req_t);
+    rsp = (attk_rsp_t *) ((uint8_t *)handle->ion_sbuffer + req_size);
+    rsp->output_length = KM_SB_LENGTH - req_size - sizeof(attk_rsp_t);
+    rsp->output_buf = sizeof(attk_rsp_t);
+
+    // Call into TrustZone.
+    ret = (int) (*km_handle->QSEECom_send_cmd)(handle, req,
+            req_size, rsp, (KM_SB_LENGTH - req_size));
+    if ((ret) || (rsp->status != 0)) {
+        ALOGE("Generate ATTK send cmd failed");
+        ALOGE("ret: %d", ret);
+        ALOGE("rsp->status: %d", rsp->status);
+        if (ret)
+            return ret;
+        else
+            return (int) rsp->status;
+    }
+
+    return ret;
+}
+
+int verify_attk_key_pair(const keymaster_device_t* dev) {
+    attk_req_t *req = NULL;
+    attk_rsp_t *rsp = NULL;
+    struct QSEECom_handle* handle = 0; // handle to KM TA
+    struct qcom_keymaster_handle *km_handle = NULL;
+    uint32_t req_size = 0;
+    int ret = 0;
+
+    if (!dev) {
+        ALOGE("pointer NULL");
+        return -1;
+    }
+
+    km_handle = (struct qcom_keymaster_handle *) dev->context;
+    if (!km_handle) {
+        ALOGE("km_handle NULL");
+        return -1;
+    }
+
+    handle = (struct QSEECom_handle *) (km_handle->qseecom);
+    if (!handle) {
+        ALOGE("Qseecom handle NULL");
+        return -1;
+    }
+
+    req = (attk_req_t *) handle->ion_sbuffer;
+    if (!req) {
+        ALOGE("handle->ion_sbuffer handle NULL");
+        return -1;
+    }
+    memset(handle->ion_sbuffer, 0, KM_SB_LENGTH);
+    req->cmd_id = KEYMASTER_SOTER_VERIFY_ATTK;
+    req_size = sizeof(attk_req_t);
+    rsp = (attk_rsp_t *) ((uint8_t *)handle->ion_sbuffer + req_size);
+    rsp->output_length = KM_SB_LENGTH - req_size - sizeof(attk_rsp_t);
+    rsp->output_buf = sizeof(attk_rsp_t);
+
+    // Call into TrustZone.
+    ret = (int) (*km_handle->QSEECom_send_cmd)(handle, req,
+            req_size, rsp, (KM_SB_LENGTH - req_size));
+    if ((ret) || (rsp->status != 0)) {
+        ALOGE("verify ATTK send cmd failed");
+        ALOGE("ret: %d", ret);
+        ALOGE("rsp->status: %d", rsp->status);
+        if (ret)
+            return ret;
+        else
+            return (int) rsp->status;
+    }
+
+    return ret;
+}
+
+int export_attk_public_key(const struct keymaster_device* dev,
+        const uint8_t* pub_key_data,
+        const size_t pub_key_data_length) {
+    attk_req_t *req = NULL;
+    attk_rsp_t *rsp = NULL;
+    struct QSEECom_handle* handle = 0; // handle to KM TA
+    struct qcom_keymaster_handle *km_handle = NULL;
+    uint32_t req_size = 0;
+    km_rsa_key_blob_type_t *export_key = NULL;
+    unsigned char *ucBuf = NULL;
+    uint32_t pkeyLen;
+    int ret = 0;
+
+    if (!dev || !pub_key_data) {
+        ALOGE("pointer NULL");
+        return -1;
+    }
+
+    if (!pub_key_data_length) {
+        return -1;
+    }
+
+    km_handle = (struct qcom_keymaster_handle *) dev->context;
+    if (!km_handle) {
+        ALOGE("km_handle NULL");
+        return -1;
+    }
+
+    handle = (struct QSEECom_handle *) (km_handle->qseecom);
+    if (!handle) {
+        ALOGE("Qseecom handle NULL");
+        return -1;
+    }
+
+    req = (attk_req_t *) handle->ion_sbuffer;
+    if (!req) {
+        ALOGE("handle->ion_sbuffer handle NULL");
+        return -1;
+    }
+    memset(handle->ion_sbuffer, 0, KM_SB_LENGTH);
+    req->cmd_id = KEYMASTER_SOTER_EXPORT_ATTK_PUBLIC;
+    req_size = sizeof(attk_req_t);
+    rsp = (attk_rsp_t *) ((uint8_t *)handle->ion_sbuffer + req_size);
+    rsp->output_length = KM_SB_LENGTH - req_size - sizeof(attk_rsp_t);
+    rsp->output_buf = sizeof(attk_rsp_t);
+
+    // Call into TrustZone.
+    ret = (int) (*km_handle->QSEECom_send_cmd)(handle, req,
+            req_size, rsp, (KM_SB_LENGTH - req_size));
+    if ((ret) || (rsp->status != 0)) {
+        ALOGE("export ATTK send cmd failed");
+        ALOGE("ret: %d", ret);
+        ALOGE("rsp->status: %d", rsp->status);
+        if (ret)
+            return ret;
+        else
+            return (int) rsp->status;
+    }
+
+    export_key = (km_rsa_key_blob_type_t *) ((uint8_t *) rsp
+            + rsp->output_buf);
+
+    if (export_key->public_exponent_size == 0) {
+        ALOGE("Key blob appears to have incorrect exponent length");
+            return -1;
+    }
+    if (export_key->modulus_size == 0) {
+        ALOGE("Key blob appears to have incorrect modulus length");
+            return -1;
+    }
+
+    // Initialize RSA from key blob
+    Unique_RSA rsa(RSA_new());
+    if (rsa.get() == NULL) {
+        ALOGE("Could not allocate RSA structure");
+        return -1;
+    }
+
+    rsa->n = BN_bin2bn(
+           reinterpret_cast<const unsigned char*>((uint8_t *)export_key + export_key->modulus),
+           export_key->modulus_size, NULL);
+    if (rsa->n == NULL) {
+        ALOGE("Failed to initialize  modulus");
+        return -1;
+    }
+
+    rsa->e = BN_bin2bn(
+            reinterpret_cast<const unsigned char*>((uint8_t *)export_key + export_key->public_exponent),
+                   export_key->public_exponent_size, NULL);
+    if (rsa->e == NULL) {
+        ALOGE("Failed to initialize public exponent");
+        return -1;
+    }
+
+    // RSA to EVP
+    Unique_EVP_PKEY pkey(EVP_PKEY_new());
+    if (pkey.get() == NULL) {
+        ALOGE("Could not allocate EVP_PKEY structure");
+        return -1;
+    }
+    if (EVP_PKEY_assign_RSA(pkey.get(), rsa.get()) != 1) {
+        ALOGE("Failed to assign rsa  parameters \n");
+        return -1;
+    }
+    OWNERSHIP_TRANSFERRED(rsa);
+
+    // EVP to BIO and output
+    Unique_BIO buffer(BIO_new(BIO_s_mem()));
+    if (buffer.get() == NULL) {
+        ALOGE("Could not allocate BIO structure");
+        return -1;
+    }
+    PEM_write_bio_PUBKEY(buffer.get(), pkey.get());
+    pkeyLen = BIO_ctrl_pending(buffer.get());
+    if (!pkeyLen || pkeyLen > pub_key_data_length)
+        return -1;
+    pkeyLen = BIO_read(buffer.get(), (void *)pub_key_data, pkeyLen);
+
+    return ret;
+}
+
+int get_device_id(const struct keymaster_device* dev,
+        const uint8_t* device_id,
+        const size_t device_id_length) {
+    attk_req_t *req = NULL;
+    attk_rsp_t *rsp = NULL;
+    struct QSEECom_handle* handle = 0;
+    struct qcom_keymaster_handle *km_handle = NULL;
+    uint32_t req_size = 0;
+    uint8_t *device_id_ptr;
+    uint32_t i = 0;
+    int ret = 0;
+
+    if (!dev || !device_id) {
+        ALOGE("pointer NULL");
+        return -1;
+    }
+    if (!device_id_length)
+        return -1;
+
+    km_handle = (struct qcom_keymaster_handle *) dev->context;
+    if (!km_handle) {
+        ALOGE("km_handle NULL");
+        return -1;
+    }
+
+    handle = (struct QSEECom_handle *) (km_handle->qseecom);
+    if (!handle) {
+        ALOGE("Qseecom handle NULL");
+        return -1;
+    }
+
+    req = (attk_req_t *) handle->ion_sbuffer;
+    if (!req) {
+        ALOGE("handle->ion_sbuffer handle NULL");
+        return -1;
+    }
+    memset(handle->ion_sbuffer, 0, KM_SB_LENGTH);
+    req->cmd_id = KEYMASTER_SOTER_GET_DEVICE_ID;
+    req_size = sizeof(attk_req_t);
+    rsp = (attk_rsp_t *) ((uint8_t *)handle->ion_sbuffer + req_size);
+    rsp->output_length = KM_SB_LENGTH - req_size - sizeof(attk_rsp_t);
+    rsp->output_buf = sizeof(attk_rsp_t);
+
+    // Call into TrustZone.
+    ret = (int) (*km_handle->QSEECom_send_cmd)(handle, req,
+            req_size, rsp, (KM_SB_LENGTH - req_size));
+    if ((ret) || (rsp->status != 0)) {
+        ALOGE("get device id send cmd failed");
+        ALOGE("ret: %d", ret);
+        ALOGE("rsp->status: %d", rsp->status);
+        if (ret)
+            return ret;
+        else
+            return (int) rsp->status;
+    }
+
+    // handle rsp
+    if (rsp->output_length > device_id_length)
+        return -1;
+    device_id_ptr = ((uint8_t *) rsp + rsp->output_buf);
+    km_memscpy((void *)device_id, device_id_length,
+                    (void *) device_id_ptr, rsp->output_length);
+
+    return ret;
+}
+#endif
 /*
  * Generic device handling
  */
@@ -783,6 +1095,10 @@ static int qcom_km_open(const hw_module_t* module, const char* name,
     dev->delete_all = NULL;
     dev->sign_data = qcom_km_sign_data;
     dev->verify_data = qcom_km_verify_data;
+    dev->generate_attk_key_pair = generate_attk_key_pair;
+    dev->verify_attk_key_pair = verify_attk_key_pair;
+    dev->export_attk_public_key = export_attk_public_key;
+    dev->get_device_id = get_device_id;
 
     *device = reinterpret_cast<hw_device_t*>(dev.release());
 

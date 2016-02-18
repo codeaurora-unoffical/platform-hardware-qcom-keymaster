@@ -23,7 +23,7 @@ LOCAL_C_INCLUDES := $(TARGET_OUT_HEADERS)/common/inc \
 LOCAL_CFLAGS := $(keymaster-def)
 
 LOCAL_SHARED_LIBRARIES := \
-        libboringcrypto \
+        libcrypto \
         liblog \
         libc \
         libdl
